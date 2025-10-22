@@ -1,0 +1,5 @@
+{
+  "name": "Kavya Ai Studio",
+  "description": "An intuitive web application that allows users to upload a photo and use AI to edit it based on a text prompt, leveraging Google's Gemini Nano model.",
+  "requestFramePermissions": []
+}
