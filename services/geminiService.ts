@@ -1,12 +1,16 @@
+
 import { GoogleGenAI, Modality, GenerateContentResponse } from "@google/genai";
 
-const API_KEY = process.env.API_KEY;
-
-if (!API_KEY) {
-  throw new Error("API_KEY environment variable not set");
-}
-
-const ai = new GoogleGenAI({ apiKey: API_KEY });
+// Lazily initialize the AI client to avoid crashing the app on load if API_KEY is missing.
+// The error will be handled gracefully when the user tries to make an API call.
+const getAiClient = (): GoogleGenAI => {
+    // FIX: Using `process.env.API_KEY` is required by the coding guidelines. This also resolves the TypeScript error with `import.meta.env`.
+    const API_KEY = process.env.API_KEY;
+    if (!API_KEY) {
+        throw new Error("API_KEY environment variable is not configured. Please set it in your hosting environment (e.g., Vercel). The application cannot contact the AI service.");
+    }
+    return new GoogleGenAI({ apiKey: API_KEY });
+};
 
 /**
  * Wraps the ai.models.generateContent call with a retry mechanism.
@@ -22,6 +26,7 @@ const generateContentWithRetry = async (
   delay = 1000
 ): Promise<GenerateContentResponse> => {
   try {
+    const ai = getAiClient();
     return await ai.models.generateContent(params);
   } catch (error) {
     if (retries > 0) {
@@ -82,9 +87,10 @@ const analyzeGarmentType = async (
     }
     return 'waist-up';
   } catch (error) {
-    console.error("Error analyzing garment type, defaulting to waist-up:", error);
-    // Default to a safe option if analysis fails
-    return 'waist-up';
+    console.error("Error analyzing garment type:", error);
+    // Re-throw the error to be handled by the caller and displayed in the UI.
+    // Swallowing the error here would hide important issues like a missing API key.
+    throw error;
   }
 };
 
@@ -96,22 +102,6 @@ export const editImageWithPrompt = async (
 ): Promise<string[]> => {
   const model = 'gemini-2.5-flash-image';
 
-  // Step 1: Analyze the garment to determine framing
-  const garmentType = await analyzeGarmentType(base64ImageData, mimeType);
-  const framingInstruction = garmentType === 'full-body'
-    ? "Capture a full-body view to showcase the entire outfit."
-    : "Frame the shot from the waist-up, focusing on the garment.";
-
-  const basePrompt = `Create an ultra-realistic, 4K resolution background for a luxury fashion brand photoshoot, inspired by editorial spreads in Vogue. The user-provided theme is: "${prompt}". The setting should exude minimalist elegance. The lighting should be cinematic and soft. 
-  
-  **CRITICAL INSTRUCTION**: The garment (including its fabric, color, design, and look) must remain **exactly** as it is in the uploaded image. DO NOT alter the clothing in any way. The original garment is the focus. The model should be facing the camera.`;
-
-  const variations = [
-    `Create a version with the model facing the camera with a confident, high-fashion pose. ${framingInstruction}`,
-    `Generate another version with the model facing the camera with a relaxed and natural expression. ${framingInstruction}`,
-    `Produce a version where the model is interacting subtly with the environment, while still facing the camera. ${framingInstruction}`
-  ];
-
   const generateSingleImage = async (variationPrompt: string): Promise<string> => {
     const contents = {
         parts: [
@@ -122,7 +112,7 @@ export const editImageWithPrompt = async (
             },
           },
           {
-            text: `${basePrompt} ${variationPrompt}`,
+            text: variationPrompt,
           },
         ],
       };
@@ -141,6 +131,22 @@ export const editImageWithPrompt = async (
   };
 
   try {
+    // Step 1: Analyze the garment to determine framing
+    const garmentType = await analyzeGarmentType(base64ImageData, mimeType);
+    const framingInstruction = garmentType === 'full-body'
+      ? "Capture a full-body view to showcase the entire outfit."
+      : "Frame the shot from the waist-up, focusing on the garment.";
+
+    const basePrompt = `Create an ultra-realistic, 4K resolution background for a luxury fashion brand photoshoot, inspired by editorial spreads in Vogue. The user-provided theme is: "${prompt}". The setting should exude minimalist elegance. The lighting should be cinematic and soft. 
+  
+  **CRITICAL INSTRUCTION**: The garment (including its fabric, color, design, and look) must remain **exactly** as it is in the uploaded image. DO NOT alter the clothing in any way. The original garment is the focus. The model should be facing the camera.`;
+
+    const variations = [
+      `${basePrompt} Create a version with the model facing the camera with a confident, high-fashion pose. ${framingInstruction}`,
+      `${basePrompt} Generate another version with the model facing the camera with a relaxed and natural expression. ${framingInstruction}`,
+      `${basePrompt} Produce a version where the model is interacting subtly with the environment, while still facing the camera. ${framingInstruction}`
+    ];
+
     const imagePromises = variations.map(variation => generateSingleImage(variation));
     const results = await Promise.all(imagePromises);
     return results;
